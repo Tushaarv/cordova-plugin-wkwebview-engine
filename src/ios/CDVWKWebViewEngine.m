@@ -58,7 +58,10 @@
             return nil;
         }
 
-        self.engineWebView = [[WKWebView alloc] initWithFrame:frame];
+        NSComparisonResult order = [[UIDevice currentDevice].systemVersion compare: @"10.0.0" options: NSNumericSearch];
+        if (order == NSOrderedSame || order == NSOrderedDescending) {
+            self.engineWebView = [[WKWebView alloc] initWithFrame:frame];
+        }
     }
 
     return self;
@@ -81,54 +84,58 @@
 
 - (void)pluginInitialize
 {
-    // viewController would be available now. we attempt to set all possible delegates to it, by default
-    NSDictionary* settings = self.commandDelegate.settings;
-
-    self.uiDelegate = [[CDVWKWebViewUIDelegate alloc] initWithTitle:[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"]];
-
-    CDVWKWeakScriptMessageHandler *weakScriptMessageHandler = [[CDVWKWeakScriptMessageHandler alloc] initWithScriptMessageHandler:self];
-
-    WKUserContentController* userContentController = [[WKUserContentController alloc] init];
-    [userContentController addScriptMessageHandler:weakScriptMessageHandler name:CDV_BRIDGE_NAME];
-
-    WKWebViewConfiguration* configuration = [self createConfigurationFromSettings:settings];
-    configuration.userContentController = userContentController;
-
-    // re-create WKWebView, since we need to update configuration
-    WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
-    wkWebView.UIDelegate = self.uiDelegate;
-    self.engineWebView = wkWebView;
-
-    if (IsAtLeastiOSVersion(@"9.0") && [self.viewController isKindOfClass:[CDVViewController class]]) {
-        wkWebView.customUserAgent = ((CDVViewController*) self.viewController).userAgent;
+    NSComparisonResult order = [[UIDevice currentDevice].systemVersion compare: @"10.0.0" options: NSNumericSearch];
+    if (order == NSOrderedSame || order == NSOrderedDescending) {
+        
+        // viewController would be available now. we attempt to set all possible delegates to it, by default
+        NSDictionary* settings = self.commandDelegate.settings;
+        
+        self.uiDelegate = [[CDVWKWebViewUIDelegate alloc] initWithTitle:[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"]];
+        
+        CDVWKWeakScriptMessageHandler *weakScriptMessageHandler = [[CDVWKWeakScriptMessageHandler alloc] initWithScriptMessageHandler:self];
+        
+        WKUserContentController* userContentController = [[WKUserContentController alloc] init];
+        [userContentController addScriptMessageHandler:weakScriptMessageHandler name:CDV_BRIDGE_NAME];
+        
+        WKWebViewConfiguration* configuration = [self createConfigurationFromSettings:settings];
+        configuration.userContentController = userContentController;
+        
+        // re-create WKWebView, since we need to update configuration
+        WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
+        wkWebView.UIDelegate = self.uiDelegate;
+        self.engineWebView = wkWebView;
+        
+        if (IsAtLeastiOSVersion(@"9.0") && [self.viewController isKindOfClass:[CDVViewController class]]) {
+            wkWebView.customUserAgent = ((CDVViewController*) self.viewController).userAgent;
+        }
+        
+        if ([self.viewController conformsToProtocol:@protocol(WKUIDelegate)]) {
+            wkWebView.UIDelegate = (id <WKUIDelegate>)self.viewController;
+        }
+        
+        if ([self.viewController conformsToProtocol:@protocol(WKNavigationDelegate)]) {
+            wkWebView.navigationDelegate = (id <WKNavigationDelegate>)self.viewController;
+        } else {
+            wkWebView.navigationDelegate = (id <WKNavigationDelegate>)self;
+        }
+        
+        if ([self.viewController conformsToProtocol:@protocol(WKScriptMessageHandler)]) {
+            [wkWebView.configuration.userContentController addScriptMessageHandler:(id < WKScriptMessageHandler >)self.viewController name:CDV_BRIDGE_NAME];
+        }
+        
+        [self updateSettings:settings];
+        
+        // check if content thread has died on resume
+        NSLog(@"%@", @"CDVWKWebViewEngine will reload WKWebView if required on resume");
+        [[NSNotificationCenter defaultCenter]
+         addObserver:self
+         selector:@selector(onAppWillEnterForeground:)
+         name:UIApplicationWillEnterForegroundNotification object:nil];
+        
+        NSLog(@"Using WKWebView");
+        
+        [self addURLObserver];
     }
-
-    if ([self.viewController conformsToProtocol:@protocol(WKUIDelegate)]) {
-        wkWebView.UIDelegate = (id <WKUIDelegate>)self.viewController;
-    }
-
-    if ([self.viewController conformsToProtocol:@protocol(WKNavigationDelegate)]) {
-        wkWebView.navigationDelegate = (id <WKNavigationDelegate>)self.viewController;
-    } else {
-        wkWebView.navigationDelegate = (id <WKNavigationDelegate>)self;
-    }
-
-    if ([self.viewController conformsToProtocol:@protocol(WKScriptMessageHandler)]) {
-        [wkWebView.configuration.userContentController addScriptMessageHandler:(id < WKScriptMessageHandler >)self.viewController name:CDV_BRIDGE_NAME];
-    }
-
-    [self updateSettings:settings];
-
-    // check if content thread has died on resume
-    NSLog(@"%@", @"CDVWKWebViewEngine will reload WKWebView if required on resume");
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(onAppWillEnterForeground:)
-               name:UIApplicationWillEnterForegroundNotification object:nil];
-
-    NSLog(@"Using WKWebView");
-
-    [self addURLObserver];
 }
 
 - (void)onReset {
@@ -224,14 +231,20 @@ static void * KVOContext = &KVOContext;
 
 - (BOOL) canLoadRequest:(NSURLRequest*)request
 {
-    // See: https://issues.apache.org/jira/browse/CB-9636
-    SEL wk_sel = NSSelectorFromString(CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR);
-
-    // if it's a file URL, check whether WKWebView has the selector (which is in iOS 9 and up only)
-    if (request.URL.fileURL) {
-        return [_engineWebView respondsToSelector:wk_sel];
-    } else {
-        return YES;
+    NSComparisonResult order = [[UIDevice currentDevice].systemVersion compare: @"10.0.0" options: NSNumericSearch];
+    if (order == NSOrderedSame || order == NSOrderedDescending) {
+        // See: https://issues.apache.org/jira/browse/CB-9636
+        SEL wk_sel = NSSelectorFromString(CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR);
+        
+        // if it's a file URL, check whether WKWebView has the selector (which is in iOS 9 and up only)
+        if (request.URL.fileURL) {
+            return [_engineWebView respondsToSelector:wk_sel];
+        } else {
+            return YES;
+        }
+    }
+    else {
+        YES;
     }
 }
 
